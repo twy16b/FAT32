@@ -1,4 +1,4 @@
 default:
-	gcc -o info info.c
+	gcc -o project3 project3.c
 clean:
-	rm *.o info
+	rm *.o project3
