@@ -14,7 +14,7 @@ typedef struct
 
 struct DIRENTRY {
 
-    unsigned char DIR_Name[11];
+    char DIR_Name[13];
     unsigned char DIR_Attr;
     unsigned char DIR_NTRes;
     unsigned char DIR_CrtTimeTenth;
@@ -39,6 +39,9 @@ typedef struct
     uint32_t BPB_TotSec32;
     uint32_t BPB_FATSz32;
     uint32_t BPB_RootClus;
+    int rootDirectoryOffset;
+    int currentDirectoryOffset;
+    char *fat32pwd;
 
 } varStruct;
 
@@ -46,12 +49,11 @@ void parseInput(instruction* instr_ptr);
 void addToken(instruction* instr_ptr, char* tok);
 void addNull(instruction* instr_ptr);
 void clearInstruction(instruction* instr_ptr);
-void expandVariables(instruction* instr_ptr);
 
 void fat32info(varStruct fat32vars);
-void fat32size();
-void fat32ls();
-void fat32cd();
+void fat32size(FILE *image, varStruct fat32vars, instruction* instr_ptr);
+void fat32ls(FILE *image, varStruct fat32vars, instruction* instr_ptr);
+void fat32cd(FILE *image, varStruct *fat32vars, instruction* instr_ptr);	
 void fat32create();
 void fat32mkdir();
 void fat32mv();
@@ -64,6 +66,8 @@ void fat32cp();
 
 int littleToBigEndian(uint8_t *address);
 void fat32initVars(FILE *image, varStruct *fat32vars);
+void fillDirectoryEntry(FILE* image, struct DIRENTRY *dir);
+void jumpToDirectory(varStruct *fat32vars, struct DIRENTRY dir);
 
 int main (int argc, char* argv[]) {
     FILE *input;
@@ -86,17 +90,17 @@ int main (int argc, char* argv[]) {
 
     //Initialize fat32 vars
     fat32initVars(input, &fat32vars);
-
+    
     //Initialize instruction
     instr.tokens = NULL;
 	instr.numTokens = 0;
 
 	while(1) {
-		printf("%s/> ", basename(argv[1]));	//PROMPT
+		printf("%s%s> ", basename(argv[1]), fat32vars.fat32pwd);	//PROMPT
 
 		//Parse instruction
 		parseInput(&instr);
-
+			
 		//Check for command
 		first = instr.tokens[0];
         if(strcmp(first, "exit")==0) {
@@ -105,7 +109,7 @@ int main (int argc, char* argv[]) {
         }
 
         else if(strcmp(first, "info")==0) {
-            if(instr.numTokens == 1) {
+            if(instr.numTokens == 1) {            
                 fat32info(fat32vars);
             }
             else printf("info : Invalid number of arguments\n");
@@ -113,22 +117,21 @@ int main (int argc, char* argv[]) {
 
         else if(strcmp(first, "size")==0) {
             if(instr.numTokens == 2) {
-								printf("size : running function\n");
-                fat32size(input,fat32vars, &instr);
+                fat32size(input, fat32vars, &instr);
             }
             else printf("size : Invalid number of arguments\n");
         }
 
         else if(strcmp(first, "ls")==0) {
             if(instr.numTokens < 3) {
-                fat32ls(input,fat32vars, &instr);
+                fat32ls(input, fat32vars, &instr);
             }
             else printf("ls : Invalid number of arguments\n");
         }
 
         else if(strcmp(first, "cd")==0) {
             if(instr.numTokens < 3) {
-                fat32cd();
+                fat32cd(input, &fat32vars, &instr);
 	        }
             else printf("cd : Invalid number of arguments\n");
         }
@@ -191,11 +194,11 @@ int main (int argc, char* argv[]) {
 
         else if(strcmp(first, "cp")==0) {
             if(instr.numTokens == 3) {
-                fat32ls();
+                fat32cp();
             }
-            else printf("ls : Invalid number of arguments\n");
+            else printf("cp : Invalid number of arguments\n");
         }
-
+        
         else {
             printf("Unknown command\n");
         }
@@ -305,202 +308,129 @@ void fat32info(varStruct fat32vars) {
 }
 
 void fat32size(FILE *image, varStruct fat32vars, instruction* instr_ptr) {
+    struct DIRENTRY dir;
 
+    fseek(image, fat32vars.currentDirectoryOffset, SEEK_SET);
+    if(fat32vars.currentDirectoryOffset != fat32vars.rootDirectoryOffset) {
+        fseek(image, 64, SEEK_CUR);
+    }
 
-		unsigned char DIR_name[11];
+    while(1) {
+        fillDirectoryEntry(image, &dir);
 
-		uint8_t *temp;
-		uint8_t *DIR_attr;
-		uint8_t DIR_size;
-		uint8_t FILE_size;
-    temp = malloc(2);
-		int offset = fat32vars.BPB_BytsPerSec * (fat32vars.BPB_RsvdSecCnt+ (fat32vars.BPB_NumFATs * fat32vars.BPB_FATSz32));
-		printf("Offset: %d\n", offset);
+        if(dir.DIR_Name[0] == 0 || dir.DIR_Name[0] == 46) {
+            printf("File %s not found\n", instr_ptr->tokens[1]);
+            break;
+        }
 
-    fseek(image, offset, SEEK_SET);
-    // DIR_name[0] = fgetc(image);
-    // DIR_name[1] = fgetc(image);
-		// DIR_name[2] = fgetc(image);
-    // DIR_name[3] = fgetc(image);
-		// DIR_name[4] = fgetc(image);
-    // DIR_name[5] = fgetc(image);
-		// DIR_name[6] = fgetc(image);
-    // DIR_name[7] = fgetc(image);
-		// DIR_name[8] = fgetc(image);
-    // DIR_name[9] = fgetc(image);
-		// DIR_name[10] = fgetc(image);
-		fread(DIR_name, 1, 11, image);
-		fread(temp, 1, 1, image);
-		//temp[0] = fgetc(image);
-    //DIR_attr = littleToBigEndian(DIR_attr, 2);
+        if(dir.DIR_Attr == 15) continue;
 
-		if(temp[0] == 15){
+        if(dir.DIR_Attr == 16) {
+            printf("File is directory. Size is 0.\n");
+            return;
+        }
 
-			// printf("Long Directory Name... IGNORE\n");
-			 fseek(image, offset+32, SEEK_SET);
-	    // DIR_name[0] = fgetc(image);
-	    // DIR_name[1] = fgetc(image);
-			// DIR_name[2] = fgetc(image);
-	    // DIR_name[3] = fgetc(image);
-			// DIR_name[4] = fgetc(image);
-	    // DIR_name[5] = fgetc(image);
-			// DIR_name[6] = fgetc(image);
-	    // DIR_name[7] = fgetc(image);
-			// DIR_name[8] = fgetc(image);
-	    // DIR_name[9] = fgetc(image);
-			// DIR_name[10] = fgetc(image);
-			// temp[0] = fgetc(image);
-			fread(DIR_name, 1, 11, image);
-			fread(temp, 1, 1, image);
-		}
+        if(strcmp(dir.DIR_Name, instr_ptr->tokens[1]) == 0) {
+            printf("%s: %d\n", dir.DIR_Name, littleToBigEndian(dir.DIR_FileSize));
+            return;
+        }
+    }
 
-		fseek(image, offset+28, SEEK_SET);
-		// temp[0] = fgetc(image);
-		// temp[1] = fgetc(image);
-		// temp[2] = fgetc(image);
-		// temp[3] = fgetc(image);
-		// DIR_size = littleToBigEndian(temp);
-
-		fread(temp, 1, 4, image);
-		DIR_size = littleToBigEndian(temp);
-
-
-
-		int directoryOffset = offset + DIR_size;
-		offset = offset+32;
-		int newoffset = offset;
-		unsigned char file_name[11];
-
-
-		while(newoffset < directoryOffset){
-				newoffset = newoffset + 32;
-
-				fseek(image, newoffset, SEEK_SET);
-				// file_name[0] = fgetc(image);
-				// file_name[1] = fgetc(image);
-				// file_name[2] = fgetc(image);
-				// file_name[3] = fgetc(image);
-				// file_name[4] = fgetc(image);
-				// file_name[5] = fgetc(image);
-				// file_name[6] = fgetc(image);
-				// file_name[7] = fgetc(image);
-				// file_name[8] = fgetc(image);
-				// file_name[9] = fgetc(image);
-				// file_name[10] = fgetc(image);
-				// temp[0] = fgetc(image);
-				//DIR_attr = littleToBigEndian(DIR_attr, 2);
-				fread(file_name, 1, 11, image);
-				fread(temp, 1, 1, image);
-
-
-				if(temp[0] == 15){
-					//printf("Long Directory Name... IGNORE\n");
-					newoffset = newoffset + 32;
-					fseek(image, newoffset, SEEK_SET);
-					fread(file_name, 1, 11, image);
-					//fread(temp, 1, 1, image);
-				}
-
-				//printf("Filename: |%s|\n", file_name);
-
-				int i;
-				int match = 1;
-				for(i = 0; i < strlen(instr_ptr->tokens[1]); i++){
-					if(instr_ptr->tokens[1][i] != file_name[i])
-						match = 0;
-				}
-
-				if(match){
-					printf("Filename: |%s|\n", file_name);
-
-					fseek(image, newoffset+28, SEEK_SET);
-					// temp[0] = fgetc(image);
-					// temp[1] = fgetc(image);
-					// temp[2] = fgetc(image);
-					// temp[3] = fgetc(image);
-					// FILE_size = littleToBigEndian(temp);
-
-					fread(temp, 1, 4, image);
-					FILE_size = littleToBigEndian(temp);
-				}
-		}
-		//ATTR_LONG_NAME is defined as follows: (ATTR_READ_ONLY | ATTR_HIDDEN |  ATTR_SYSTEM | ATTR_VOLUME_ID)
-
-
-
-		printf("DIR_name: |%s|\n", DIR_name);
-		printf("DIR_attr: |%d|\n", DIR_size);
-
-
-
-    printf("Size of %s: %d\n", instr_ptr->tokens[1], FILE_size);
-    return;
-}
-
-void fat32cd() {
+    printf("File not found\n");
 
 }
 
 void fat32ls(FILE *image, varStruct fat32vars, instruction* instr_ptr) {
-	unsigned char DIR_name[11];
+    struct DIRENTRY dir;
 
-	uint8_t *temp;
-	uint8_t *DIR_attr;
-	uint8_t DIR_size;
-	uint8_t FILE_size;
-	temp = malloc(2);
-	int offset = fat32vars.BPB_BytsPerSec * (fat32vars.BPB_RsvdSecCnt+ (fat32vars.BPB_NumFATs * fat32vars.BPB_FATSz32));
-	// printf("Offset: %d\n", offset);
+    fseek(image, fat32vars.currentDirectoryOffset, SEEK_SET);
 
-	fseek(image, offset, SEEK_SET);
-	fread(DIR_name, 1, 11, image);
-	fread(temp, 1, 1, image);
+    if(fat32vars.currentDirectoryOffset != fat32vars.rootDirectoryOffset) {
+    printf("\033[0;34m");
+    printf(".\n..\n");
+    printf("\033[0m");
+    fseek(image, 64, SEEK_CUR);
+    }
 
-	if(temp[0] == 15){
-		// printf("Long Directory Name... IGNORE\n");
-		fseek(image, offset+32, SEEK_SET);
-		fread(DIR_name, 1, 11, image);
-		fread(temp, 1, 1, image);
-	}
-
-	printf("%s\n", DIR_name);
-
-	fseek(image, offset+28, SEEK_SET);
-	fread(temp, 1, 4, image);
-	DIR_size = littleToBigEndian(temp);
-
-
-	int directoryOffset = offset + DIR_size;
-	offset = offset+32;
-	int newoffset = offset;
-	unsigned char file_name[11];
-
-
-	while(newoffset < directoryOffset){
-			newoffset = newoffset + 32;
-
-			fseek(image, newoffset, SEEK_SET);
-			fread(file_name, 1, 11, image);
-			fread(temp, 1, 1, image);
-
-
-			if(temp[0] == 15){
-				//printf("Long Directory Name... IGNORE\n");
-				newoffset = newoffset + 32;
-				fseek(image, newoffset, SEEK_SET);
-				fread(file_name, 1, 11, image);
-				//fread(temp, 1, 1, image);
-			}
-
-				printf("%s\n", file_name);
-
-
-	}
-	//ATTR_LONG_NAME is defined as follows: (ATTR_READ_ONLY | ATTR_HIDDEN |  ATTR_SYSTEM | ATTR_VOLUME_ID)
-
-	return;
+    while(1) {
+        fillDirectoryEntry(image, &dir);
+        if(dir.DIR_Name[0] == 0 || dir.DIR_Name[0] == 46) break;
+        if(dir.DIR_Attr == 15) continue;
+        if(dir.DIR_Attr == 16) printf("\033[0;34m");
+        else printf("\033[0m");
+        printf("%s\n", dir.DIR_Name);
+    }
+    printf("\033[0m");
 }
 
+void fat32cd(FILE *image, varStruct *fat32vars, instruction* instr_ptr) {		
+    struct DIRENTRY dir;
+    int dirSector = 0;
+    fseek(image, fat32vars->currentDirectoryOffset, SEEK_SET);
+
+    //No arguments, move back to root directory
+    if(instr_ptr->numTokens == 1) {
+
+        fat32vars->currentDirectoryOffset =
+        fat32vars->BPB_BytsPerSec * 
+        (fat32vars->BPB_RsvdSecCnt + 
+        (fat32vars->BPB_NumFATs * fat32vars->BPB_FATSz32));
+
+        free(fat32vars->fat32pwd);
+        fat32vars->fat32pwd = malloc(1);
+        fat32vars->fat32pwd[0] = '\0';
+        
+        return;
+    }
+
+    //Handle the "." and ".." cases
+    if(fat32vars->currentDirectoryOffset != fat32vars->rootDirectoryOffset) {
+
+        if(strcmp(instr_ptr->tokens[1], ".") == 0) {
+            return;
+        }
+
+        else if(strcmp(instr_ptr->tokens[1], "..") == 0) {
+
+            fseek(image, 32, SEEK_CUR);
+            fillDirectoryEntry(image, &dir);
+            jumpToDirectory(fat32vars, dir);
+
+            //Remove last directory in path
+            char *temp = strstr(fat32vars->fat32pwd, "/..");
+            --temp;
+            while(*temp != '/'){--temp;};
+            *temp = '\0';
+
+            return;
+        }
+    }
+    fseek(image, 64, SEEK_CUR);
+
+    //Navigate to directory in instruction
+    while(1) {
+        fillDirectoryEntry(image, &dir);
+        
+        if(dir.DIR_Name[0] == 0 || dir.DIR_Name[0] == 46) { 
+            printf("Directory %s not found\n", instr_ptr->tokens[1]);
+            break;
+        }
+
+        if(dir.DIR_Attr == 15) continue;
+
+        if(strcmp(dir.DIR_Name, instr_ptr->tokens[1]) == 0) {
+
+            if(dir.DIR_Attr != 16) {
+                printf("%s is not a directory\n", instr_ptr->tokens[1]);
+                return;
+            }
+
+            else jumpToDirectory(fat32vars, dir);
+
+            break;
+        }
+    }
+}
 
 void fat32create() {
 
@@ -582,4 +512,67 @@ void fat32initVars(FILE *image, varStruct *fat32vars) {
     fat32vars->BPB_RootClus = littleToBigEndian(temp);
     free(temp);
 
+    fat32vars->rootDirectoryOffset = 
+    fat32vars->BPB_BytsPerSec * 
+    (fat32vars->BPB_RsvdSecCnt + 
+    (fat32vars->BPB_NumFATs * fat32vars->BPB_FATSz32));
+
+    fat32vars->currentDirectoryOffset = fat32vars->rootDirectoryOffset;
+
+    fat32vars->fat32pwd = malloc(1);
+    fat32vars->fat32pwd[0] = '\0';    
+}
+
+void fillDirectoryEntry(FILE* image, struct DIRENTRY *dir) {
+
+    //Fill directory name, add null terminator
+    fread(dir->DIR_Name, 1, 11, image);
+    int pos = 0;
+    while(pos < 13) {
+        if(dir->DIR_Name[pos] == 32 || pos == 12) {
+            dir->DIR_Name[pos] = '\0';
+            break;
+        }
+        else ++pos;
+    }
+
+    dir->DIR_Attr = fgetc(image);
+    dir->DIR_NTRes = fgetc(image);
+    dir->DIR_CrtTimeTenth = fgetc(image);
+    fread(dir->DIR_CrtTime, 1, 2, image);
+    fread(dir->DIR_CrtDate, 1, 2, image);
+    fread(dir->DIR_LstAccDate, 1, 2, image);
+    fread(dir->DIR_FstClusHI, 1, 2, image);
+    fread(dir->DIR_WrtTime, 1, 2, image);
+    fread(dir->DIR_WrtDate, 1, 2, image);
+    fread(dir->DIR_FstClusLO, 1, 2, image);
+    fread(dir->DIR_FileSize, 1, 4, image);
+
+}
+
+void jumpToDirectory(varStruct *fat32vars, struct DIRENTRY dir) {
+    int dirSector;
+    char *temp = malloc(4);
+    temp[0] = dir.DIR_FstClusLO[0];
+    temp[1] = dir.DIR_FstClusLO[1];
+    temp[2] = dir.DIR_FstClusHI[0];
+    temp[3] = dir.DIR_FstClusHI[1];
+
+    dirSector = littleToBigEndian(temp);
+    if(dirSector == 0) 
+        fat32vars->currentDirectoryOffset = 
+        fat32vars->rootDirectoryOffset;
+    else
+        fat32vars->currentDirectoryOffset = 
+        fat32vars->rootDirectoryOffset +
+        ((dirSector-2) * 512);
+
+    //Reallocate PWD for new directory
+    fat32vars->fat32pwd = 
+    realloc(fat32vars->fat32pwd, 
+    strlen(fat32vars->fat32pwd) + strlen(dir.DIR_Name) + 2);
+
+    strcat(fat32vars->fat32pwd, "/");
+    strcat(fat32vars->fat32pwd, dir.DIR_Name);
+    return;
 }
