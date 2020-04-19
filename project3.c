@@ -706,5 +706,4 @@ int compareFilenames(char *filename1, char *filename2) {
     }
 
     return strcmp(temp1, temp2);
-
 }
