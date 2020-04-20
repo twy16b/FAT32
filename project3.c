@@ -470,6 +470,7 @@ void fat32mv(FILE *image, varStruct *fat32vars, char *FROM, char *TO) {
 
     if(strlen(TO) > 8) {
         printf("Filename too long\n");
+	return;
     }
 
     //Handle the "." and ".." cases for FROM
