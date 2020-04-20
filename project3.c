@@ -471,6 +471,10 @@ void fat32open(varStruct *fat32vars, char* filename, char *mode) {
     if(!strcmp(mode, "r")) modeInt = 1;
     else if(!strcmp(mode, "w")) modeInt = 2;
     else if(!strcmp(mode, "rw") || !strcmp(mode, "wr")) modeInt = 3;
+    else {
+        printf("Invalid mode\n");
+        return;
+    }
 
     if(fat32vars->currentDirectoryOffset != fat32vars->rootDirectoryOffset) {
         if(!strcmp(filename, ".") || !strcmp(filename, "..")) {
@@ -588,6 +592,10 @@ void fat32read(FILE *image, varStruct *fat32vars, char* filename, char *offsetSt
 
         if(compareFilenames(dir->DIR_Name, filename) == 0) {
 
+            if(littleToBigEndian(dir->DIR_FileSize) == 0) {
+                printf("File is empty.\n");
+                return;
+            }
             if(dir->DIR_Attr == 16) {
                 printf("File is directory.\n");
                 return;
@@ -596,21 +604,27 @@ void fat32read(FILE *image, varStruct *fat32vars, char* filename, char *offsetSt
                 for(loop = 0; loop < fat32vars->numOpenFiles; ++loop) {
                     file = &fat32vars->openFiles[loop];
                     if(!strcmp(basename(file->path), filename)) {
+                        if(file->mode == 2) {
+                            printf("File is in write only mode\n");
+                            return;
+                        }
                         int filesize = littleToBigEndian(dir->DIR_FileSize);
                         if((offset + size) > filesize) {
                             printf("Offset + Size is too large\n");
                             return;
                         }
                         int readCluster = getDirectoryFirstCluster(fat32vars, dir);
-                        fseek(image, clusterToOffset(fat32vars, readCluster), SEEK_SET);
-                        while(offset > fat32vars->BPB_BytsPerSec) {
-                            readCluster = getNextClusterNumber(image, fat32vars, readCluster);
-                            offset -= fat32vars->BPB_BytsPerSec;
-                        }
                         int readOffset = clusterToOffset(fat32vars, readCluster) + offset;
-                        fseek(image, readOffset, SEEK_CUR);
+                        fseek(image, readOffset, SEEK_SET);
                         unsigned char *output = malloc(size);
-                        fread(output, size, 1, image);
+                        for(loop = 0; loop < size; ++loop) {
+                            output[loop] = fgetc(image);
+                            if((ftell(image)%fat32vars->BPB_BytsPerSec) == 0) {
+                                readCluster = getNextClusterNumber(image, fat32vars, readCluster);
+                                readOffset = clusterToOffset(fat32vars, readCluster) + offset;
+                                fseek(image, readOffset, SEEK_SET);
+                            }
+                        }
                         printf("%s\n", output);
                         return;
                     }
