@@ -71,7 +71,7 @@ void fat32ls(FILE *image, varStruct *fat32vars, instruction* instr_ptr);
 void fat32cd(FILE *image, varStruct *fat32vars, instruction* instr_ptr);	
 void fat32create();
 void fat32mkdir(FILE *image, char* filename, varStruct *fat32vars, instruction* instr_ptr);
-void fat32mv();
+void fat32mv(FILE *image, varStruct *fat32vars, char *filename1, char *filename2);
 void fat32open(varStruct *fat32vars, char* filename, char *mode);
 void fat32close(varStruct *fat32vars, char* filename);
 void fat32read(FILE *image, varStruct *fat32vars, char* filename, char *offsetString, char *sizeString);
@@ -176,13 +176,17 @@ int main (int argc, char* argv[]) {
         else if(strcmp(first, "mkdir")==0) {
             if(instr.numTokens == 2) {
                 fat32mkdir(input, argv[1], &fat32vars, &instr);
+                fclose(input);
+                input = fopen(argv[1], "r+");
             }
             else printf("mkdir : Invalid number of arguments\n");
         }
 
         else if(strcmp(first, "mv")==0) {
             if(instr.numTokens == 3) {
-                fat32mv();
+                fat32mv(input, &fat32vars, instr.tokens[1], instr.tokens[2]);
+                fclose(input);
+                input = fopen(argv[1], "r+");
             }
             else printf("mv : Invalid number of arguments\n");
         }
@@ -203,7 +207,7 @@ int main (int argc, char* argv[]) {
 
         else if(strcmp(first, "read")==0) {
             if(instr.numTokens == 4) {
-                fat32read(input, &fat32vars, instr.tokens[1], instr.tokens[2], instr.tokens[3]);
+                fat32read(input, &fat32vars, instr.tokens[1], instr.tokens[2], instr.tokens[3]);                
             }
             else printf("read : Invalid number of arguments\n");
         }
@@ -227,6 +231,8 @@ int main (int argc, char* argv[]) {
         else if(strcmp(first, "cp")==0) {
             if(instr.numTokens == 3) {
                 fat32cp();
+                fclose(input);
+                input = fopen(argv[1], "r+");
             }
             else printf("cp : Invalid number of arguments\n");
         }
@@ -458,7 +464,83 @@ void fat32mkdir(FILE *image, char* filename, varStruct *fat32vars, instruction* 
     fillDirectories(image, fat32vars);
 }
 
-void fat32mv() {
+void fat32mv(FILE *image, varStruct *fat32vars, char *FROM, char *TO) {
+    struct DIRENTRY *dir, *dirFROM = NULL, *dirTO = NULL;
+    int loop;
+
+    if(strlen(TO) > 8) {
+        printf("Filename too long\n");
+    }
+
+    //Handle the "." and ".." cases for FROM
+    if(fat32vars->currentDirectoryOffset != fat32vars->rootDirectoryOffset) {
+        if(!strcmp(FROM, ".") || !strcmp(FROM, "..")) {
+            printf("Invalid file\n");
+            return;
+        }
+    }
+
+    //Navigate to file in FROM
+    for(loop = 0; loop < fat32vars->numDirectories; ++loop) {
+
+        dir = &fat32vars->currentDirectories[loop];
+
+        if(dir->DIR_Attr == 15) continue;
+
+        if(!compareFilenames(dir->DIR_Name, FROM)) {
+            
+            if(dir->DIR_Attr == 16) {
+                printf("FROM is a directory.\n");
+                return;
+            }
+            else {
+                dirFROM = dir;
+                break;
+            }
+        }
+    }
+
+    //FROM was not found, print error
+    if(dirFROM == NULL) {
+        printf("%s not found\n", FROM);
+        return;
+    }
+
+    //Navigate to directory in TO
+    for(loop = 0; loop < fat32vars->numDirectories; ++loop) {
+
+        dir = &fat32vars->currentDirectories[loop];
+
+        if(dir->DIR_Attr == 15) continue;
+
+        if(!compareFilenames(dir->DIR_Name, TO)) {
+            if(dir->DIR_Attr != 16) {
+                printf("File already exists\n");
+                return;
+            }
+            else {
+                dirTO = dir;
+                break;
+            }
+        }
+    }
+
+    if(dirTO != NULL) {
+        printf("Not implemented\n");
+        //Move file into directory
+    }
+
+    else {
+        char *temp = malloc(11);
+        memset(temp, 32, 11);
+        for(loop = 0; loop < strlen(TO); ++loop) {
+            temp[loop] = toupper(TO[loop]);
+        }
+        fseek(image, dirFROM->entryOffset, SEEK_SET);
+        fwrite(temp, 1, 11, image);
+        fillDirectories(image, fat32vars);
+        return;
+    }
 
 }
 
