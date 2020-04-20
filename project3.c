@@ -70,7 +70,7 @@ void fat32size(FILE *image, varStruct *fat32vars, char *filename);
 void fat32ls(FILE *image, varStruct *fat32vars, instruction* instr_ptr);
 void fat32cd(FILE *image, varStruct *fat32vars, instruction* instr_ptr);	
 void fat32create();
-void fat32mkdir(FILE *image, char* filename, varStruct *fat32vars, instruction* instr_ptr);
+void fat32mkdir(FILE *image, varStruct *fat32vars, char *directoryName);
 void fat32mv(FILE *image, varStruct *fat32vars, char *filename1, char *filename2);
 void fat32open(varStruct *fat32vars, char* filename, char *mode);
 void fat32close(varStruct *fat32vars, char* filename);
@@ -94,9 +94,10 @@ int getDirectoryFirstCluster (varStruct *fat32vars, struct DIRENTRY *dir);
 int getDirectoryFirstOffset (varStruct *fat32vars, struct DIRENTRY *dir);
 int littleToBigEndian(unsigned char *address);
 int fileIsOpen(varStruct *fat32vars, char *filename);
-int getFirstFreeCluster(FILE *image, varStruct fat32vars);
-void makeDirEntry(varStruct *fat32vars, struct DIRENTRY *dir, char* dirName, int clusterNum);
-char* dirEntryText(struct DIRENTRY *dir);
+int getFirstFreeCluster(FILE *image, varStruct *fat32vars);
+void markFATentry(FILE *image, varStruct *fat32vars, int cluster, int nextCluster);
+char* directoryToString(struct DIRENTRY *dir);
+char *makeDirEntryString(varStruct *fat32vars, char *filename, int firstFreeClus);
 int bitExtracted(int number, int k, int p);
 
 int main (int argc, char* argv[]) {
@@ -175,7 +176,7 @@ int main (int argc, char* argv[]) {
 
         else if(strcmp(first, "mkdir")==0) {
             if(instr.numTokens == 2) {
-                fat32mkdir(input, argv[1], &fat32vars, &instr);
+                fat32mkdir(input, &fat32vars, instr.tokens[1]);
                 fclose(input);
                 input = fopen(argv[1], "r+");
             }
@@ -419,48 +420,51 @@ void fat32create() {
 
 }
 
-void fat32mkdir(FILE *image, char* filename, varStruct *fat32vars, instruction* instr_ptr) {
-    int firstFreeClus = getFirstFreeCluster(image, *fat32vars);
-    int freeClusOffset = (2050 + (firstFreeClus-2)) * fat32vars->BPB_BytsPerSec;
-    unsigned char * temp = malloc(4);
-    int freeDirOffset = fat32vars->currentDirectoryOffset;
+void fat32mkdir(FILE *image, varStruct *fat32vars, char *directoryName) {
+
+    if(strlen(directoryName) > 8) {
+        printf("Directory name too long.\n");
+        return;
+    }
+
+    //Check if that directory already exists
+    int loop;
+    for(loop = 0; loop < fat32vars->numDirectories; ++loop) {
+        if (!compareFilenames(directoryName, fat32vars->currentDirectories[loop].DIR_Name)) {
+            printf("Directory already exists\n");
+            return;
+        }
+    }
+
+    int firstFreeClus = getFirstFreeCluster(image, fat32vars);
+    markFATentry(image, fat32vars, firstFreeClus, 0);
+    int freeClusOffset = clusterToOffset(fat32vars, firstFreeClus);
+    int currDirCluster = offsetToCluster(fat32vars, fat32vars->currentDirectoryOffset);
+    if(currDirCluster == fat32vars->BPB_RootClus) currDirCluster = 0;
 
     //find first empty space in current directory, store in freeDirOffset
+    unsigned char * readEntry = malloc(32);
+    fseek(image, fat32vars->currentDirectoryOffset, SEEK_SET);
     do{
-        fseek(image, freeDirOffset, SEEK_SET);
-        fread(temp, 1, 4, image);
-        if (littleToBigEndian(temp) != 0)
-            freeDirOffset += 32;
-    }
-    while(littleToBigEndian(temp) != 0);
+        fread(readEntry, 1, 32, image);
+    } while (readEntry[0] != 0 && readEntry[0] != 229);
+    fseek(image, -32, SEEK_CUR);
+    int freeDirOffset = ftell(image);
 
-    //create new direntry at freeDirOffset
-    struct DIRENTRY * dir = malloc(sizeof(struct DIRENTRY));
-    makeDirEntry(fat32vars, dir, instr_ptr->tokens[1], firstFreeClus);  //fill in dir values in dir
-    char* dirStr = dirEntryText(dir);                                   //get 32-bit dir entry
-    fseek(image, freeDirOffset, SEEK_SET);                              //write dir entry at freeDirOffset
-    fwrite(dirStr, 1, 32, image);
-    free(dir);
+    //Create directory entry in current directory
+    char* dirEntry = makeDirEntryString(fat32vars, directoryName, firstFreeClus);
+    fseek(image, freeDirOffset, SEEK_SET);
+    fwrite(dirEntry, 1, 32, image);
 
-    //make direntry for . and write to directory's cluster
-    dir = malloc(sizeof(struct DIRENTRY));
-    makeDirEntry(fat32vars, dir, ".", firstFreeClus);
-    dirStr = dirEntryText(dir);
+    //Create "." and ".." directories in new directory
+    dirEntry = makeDirEntryString(fat32vars, ".", firstFreeClus);
     fseek(image, freeClusOffset, SEEK_SET);
-    fwrite(dirStr, 1, 32, image);
-    free(dir);
-
-    //make direntry for .. and write to directory's cluster
-    dir = malloc(sizeof(struct DIRENTRY));
-    int currCluster = (fat32vars->currentDirectoryOffset / fat32vars->BPB_BytsPerSec) - (fat32vars->currentDirectoryOffset/fat32vars->BPB_BytsPerSec) + 2; //cluster number of pwd
-    makeDirEntry(fat32vars, dir, "..", currCluster);
-    dirStr = dirEntryText(dir);
+    fwrite(dirEntry, 1, 32, image);
+    dirEntry = makeDirEntryString(fat32vars, "..", currDirCluster);
     fseek(image, freeClusOffset+32, SEEK_SET);
-    fwrite(dirStr, 1, 32, image);
-    free(dir);
+    fwrite(dirEntry, 1, 32, image);
 
     //update currentDirectories with newly created directory
-    fat32vars->currentDirectories = malloc(1);
     fillDirectories(image, fat32vars);
 }
 
@@ -470,7 +474,7 @@ void fat32mv(FILE *image, varStruct *fat32vars, char *FROM, char *TO) {
 
     if(strlen(TO) > 8) {
         printf("Filename too long\n");
-	return;
+        return;
     }
 
     //Handle the "." and ".." cases for FROM
@@ -547,7 +551,7 @@ void fat32mv(FILE *image, varStruct *fat32vars, char *FROM, char *TO) {
             }
         }
         unsigned char *temp = malloc(32);
-        temp = dirEntryText(dirFROM);
+        temp = directoryToString(dirFROM);
         fseek(image, tempDir.entryOffset, SEEK_SET);
         fwrite(temp, 32, 1, image);
         
@@ -822,6 +826,7 @@ void fat32cp() {
 
 }
 
+//Initializes all the variables for the FAT32 volume
 void fat32initVars(FILE *image, varStruct *fat32vars) {
     unsigned char *temp;
 
@@ -878,6 +883,7 @@ void fat32initVars(FILE *image, varStruct *fat32vars) {
     fat32vars->numOpenFiles = 0;
 }
 
+//Fills dir pointer with 32 byte directory entry at current seek
 void fillDirectoryEntry(FILE* image, struct DIRENTRY *dir) {
 
     dir->entryOffset = ftell(image);
@@ -907,6 +913,8 @@ void fillDirectoryEntry(FILE* image, struct DIRENTRY *dir) {
 
 }
 
+//Fills the currentDirectories array with directory entries at currentDirectoryOffset
+//currentDirectories array does not need to be emptied beforehand
 void fillDirectories(FILE *image, varStruct *fat32vars) {
     struct DIRENTRY dir;
     int dirCount = 0;
@@ -956,6 +964,8 @@ void fillDirectories(FILE *image, varStruct *fat32vars) {
     fat32vars->currentDirectoryOffset = originalOffset;
 }
 
+//Changes currentDirectoryOffset to first cluster pointed to by dir
+//Adds filename to the fat32pwd string
 void jumpToDirectory(varStruct *fat32vars, struct DIRENTRY *dir) {
     
     fat32vars->currentDirectoryOffset = getDirectoryFirstOffset(fat32vars, dir);
@@ -972,6 +982,7 @@ void jumpToDirectory(varStruct *fat32vars, struct DIRENTRY *dir) {
     return;
 }
 
+//Get the FAT entry offset of the passed in cluster number
 int getFATentryOffset (varStruct *fat32vars, int cluster) {
     int FAToffset = 
     fat32vars->BPB_BytsPerSec *
@@ -981,6 +992,17 @@ int getFATentryOffset (varStruct *fat32vars, int cluster) {
     return cluster * 4 + FAToffset;
 }
 
+//Returns the cluster number associated with the FAT entry at the passed in offset
+int getFATentryCluster(varStruct *fat32vars, int offset) {
+    int FAToffset = 
+    fat32vars->BPB_BytsPerSec *
+    fat32vars->BPB_SecPerClus *
+    fat32vars->BPB_RsvdSecCnt;
+
+    return (offset - FAToffset) / 4;
+}
+
+//Get the number of the next cluster pointed to by the FAT entry of passed in cluster nuber
 int getNextClusterNumber(FILE *image, varStruct *fat32vars, int cluster) {
 
     fseek(image, getFATentryOffset(fat32vars, cluster), SEEK_SET);
@@ -999,6 +1021,7 @@ int getNextClusterNumber(FILE *image, varStruct *fat32vars, int cluster) {
     else return nextCluster;
 }
 
+//Get the offset of the next cluster pointed to by the FAT entry of the passed in cluster offset
 int getNextClusterOffset(FILE *image, varStruct *fat32vars, int offset) {
 
     int cluster = offsetToCluster(fat32vars, offset);
@@ -1009,6 +1032,7 @@ int getNextClusterOffset(FILE *image, varStruct *fat32vars, int offset) {
     else return clusterToOffset(fat32vars, nextCluster);
 }
 
+//Turn both strings into uppercase and return 0 if they are the same.
 int compareFilenames(char *filename1, char *filename2) {
     char *temp1, *temp2;
     int loop;
@@ -1030,6 +1054,7 @@ int compareFilenames(char *filename1, char *filename2) {
 
 }
 
+//Clear out the data the directory pointer is tied to and clear the FAT at each cluster
 void clearFATentries (FILE *image, varStruct *fat32vars, struct DIRENTRY *dir) {
 
     int FAToffset = fat32vars->BPB_RsvdSecCnt * fat32vars->BPB_BytsPerSec;
@@ -1062,6 +1087,7 @@ void clearFATentries (FILE *image, varStruct *fat32vars, struct DIRENTRY *dir) {
     return;
 }
 
+//Convert a cluster number into an absolute offset
 int clusterToOffset(varStruct *fat32vars, int cluster) {
     return
     (cluster - 2) *
@@ -1069,6 +1095,7 @@ int clusterToOffset(varStruct *fat32vars, int cluster) {
     fat32vars->rootDirectoryOffset;
 }
 
+//Convert a cluster offset into the cluster number
 int offsetToCluster(varStruct *fat32vars, int offset) {
     if(offset % fat32vars->BPB_BytsPerSec != 0) 
     printf("OFFSET IS NOT MULTIPLE OF BYTES PER SEC\n");
@@ -1078,6 +1105,7 @@ int offsetToCluster(varStruct *fat32vars, int offset) {
     fat32vars->BPB_BytsPerSec) + 2;
 }
 
+//Get the first cluster number pointed to by the directory entry
 int getDirectoryFirstCluster (varStruct *fat32vars, struct DIRENTRY *dir) {
     unsigned char *temp = malloc(4);
     temp[0] = dir->DIR_FstClusLO[0];
@@ -1087,13 +1115,13 @@ int getDirectoryFirstCluster (varStruct *fat32vars, struct DIRENTRY *dir) {
 
     int firstCluster = littleToBigEndian(temp);
 
-    return firstCluster;
+    if (firstCluster > 2) return firstCluster;
+    else return 2;
 }
 
+//Get the offset of the first cluster pointed to by the directory entry
 int getDirectoryFirstOffset (varStruct *fat32vars, struct DIRENTRY *dir) {
-    int dirFirstCluster = getDirectoryFirstCluster(fat32vars, dir);
-    if(dirFirstCluster == 0) return fat32vars->rootDirectoryOffset;
-    else return clusterToOffset(fat32vars, dirFirstCluster);
+    return clusterToOffset(fat32vars, getDirectoryFirstCluster(fat32vars, dir));
 }
 
 //This function will segfault if you pass a pointer with less than 4 bytes of memory allocated
@@ -1101,6 +1129,7 @@ int littleToBigEndian(unsigned char *address) {
     return address[0] | address[1] << 8 | address[2] << 16 | address[3] << 24;
 }
 
+//Returns 1 if the file is in the openFiles array
 int fileIsOpen(varStruct *fat32vars, char *filename){
     int loop;
     fileStruct *file;
@@ -1113,141 +1142,168 @@ int fileIsOpen(varStruct *fat32vars, char *filename){
 
 //Traverses FAT and finds the first free cluster
 //Writes free cluster in first available slot in FAT
-int getFirstFreeCluster(FILE *image, varStruct fat32vars){
-    int offset = (fat32vars.BPB_BytsPerSec * fat32vars.BPB_RsvdSecCnt) + (2 * 4);   //byte num of FAT
-    unsigned char * temp1;
-    temp1 = malloc(4);
-    int increment = 4;
+int getFirstFreeCluster(FILE *image, varStruct *fat32vars){
+
+    int FAToffset = 
+    fat32vars->BPB_BytsPerSec *
+    fat32vars->BPB_SecPerClus *
+    fat32vars->BPB_RsvdSecCnt;
+
+    fseek(image, FAToffset, SEEK_SET);
+
+    unsigned char * FATentry;
+    FATentry = malloc(4);
     int freeClus;   //stores cluster num of first available cluster
 
     //search FAT until you come across a 0
-    do{
-        offset += increment;
-        fseek(image, offset, SEEK_SET);
-        fread(temp1, 1, 4, image);
+    while(1){
+        fread(FATentry, 1, 4, image);
+        if(littleToBigEndian(FATentry) == 0) break;
     }
-    while(littleToBigEndian(temp1) != 0);
-
-    //traverse back until you find the last clusterNum
-    do{           
-        offset -= increment;
-        fseek(image, offset, SEEK_SET);           
-        fread(temp1, 1, 4, image);
-    }
-    while(littleToBigEndian(temp1) == 0x0FFFFFFF);
+    fseek(image, -4, SEEK_CUR);
     
     //calculate first available cluster
-    freeClus = littleToBigEndian(temp1) + 9;
-    int i;
+    return getFATentryCluster(fat32vars, ftell(image));
+}
 
-    //fill in spaces until next cluster with 0FFFFFFF
+//Marks the FAT entry for cluster to point to nextCluster
+//If cluster is the final cluster, pass in 0 as nextCluster
+void markFATentry(FILE *image, varStruct *fat32vars, int cluster, int nextCluster) {
+
+    int FAToffset = 
+    fat32vars->BPB_BytsPerSec *
+    fat32vars->BPB_SecPerClus *
+    fat32vars->BPB_RsvdSecCnt;
+
     unsigned char emptyHex[4];
     emptyHex[0] = 255;
     emptyHex[1] = 255;
     emptyHex[2] = 255;
     emptyHex[3] = 15;
-    for (i=0; i < 8; i++){
-        offset += increment;
-        fseek(image, offset, SEEK_SET);
+
+    int FATclusterOffset = getFATentryOffset(fat32vars, cluster);
+    
+    //nextCluster being 0 means it is the final cluster of that file
+    if(nextCluster == 0) {
+        fseek(image, FATclusterOffset, SEEK_SET);
         fwrite(emptyHex, 1, 4, image);
+        return;
     }
 
+    int FATnextClusterOffset = getFATentryOffset(fat32vars, nextCluster);
+
+    //Convert next cluster into little endian
+    unsigned char *nextHex = malloc(4);
+    nextHex[0] = 0;
+    nextHex[1] = 0;
+    nextHex[2] = 0;
+    nextHex[3] = 0;
+
+    //Mark cluster to point to next cluster
+    fseek(image, FATclusterOffset, SEEK_SET);
+    fwrite(nextHex, 1, 4, image);
+    return;
+
+    //Mark next cluster as the last cluster
+    fseek(image, FATnextClusterOffset, SEEK_SET);
+    fwrite(emptyHex, 1, 4, image);
+    return;
+
     //write new clusterNum to the FAT (32 bytes after the last cluster)
-    offset += increment;
     unsigned char freeClusHex[4];
-    freeClusHex[0] = bitExtracted(freeClus, 8, 1);
-    freeClusHex[1] = bitExtracted(freeClus, 8, 9);
-    freeClusHex[2] = bitExtracted(freeClus, 8, 17);
-    freeClusHex[3] = bitExtracted(freeClus, 8, 25);
-    fseek(image, offset, SEEK_SET);
-    fwrite(freeClusHex, 1, 4, image);
+    freeClusHex[0] = bitExtracted(cluster, 8, 1);
+    freeClusHex[1] = bitExtracted(cluster, 8, 9);
+    freeClusHex[2] = bitExtracted(cluster, 8, 17);
+    freeClusHex[3] = bitExtracted(cluster, 8, 25);
+    fseek(image, FAToffset, SEEK_SET);
+    //fwrite(freeClusHex, 1, 4, image);
 
     //write 0FFFFFFF after clusterNum
-    offset += 4;
-    fseek(image, offset, SEEK_SET);
-    fwrite(emptyHex, 1, 4, image);
+    fseek(image, FAToffset, SEEK_SET);
+    //fwrite(emptyHex, 1, 4, image);
 
-    free(temp1);
-
-    return freeClus;
+    return;
 }
 
 //fill in dir with appropriate values (dirName and first cluster, mainly)
-void makeDirEntry(varStruct *fat32vars, struct DIRENTRY *dir, char* dirName, int clusterNum){
-    strcpy(dir->DIR_Name, dirName);
+void makeDirEntry(varStruct *fat32vars, struct DIRENTRY *dir, char* dirName, int firstClusterNum){
+    
+    //Set all bytes to 0 to clean allocated memory
+    memset(dir, 0, 32);
+    
+    //Set first 11 bytes as spaces for the name entry
+    memset(dir, 32, 11);
+    
+    //Copy passed in name
+    int loop;
+    for(loop = 0; loop < strlen(dirName); ++loop) {
+        dir->DIR_Name[loop] = dirName[loop];
+    }
+
+    //Set attribute
     dir->DIR_Attr = ATTR_DIRECTORY;
-    dir->DIR_NTRes = 0;
 
     //extract lower bits of first cluster
     unsigned char lowBits[2];
-    lowBits[0] = bitExtracted(clusterNum, 8, 1);
-    lowBits[1] = bitExtracted(clusterNum, 8, 9);
-    strcpy(dir->DIR_FstClusLO, lowBits);
+    dir->DIR_FstClusLO[0] = bitExtracted(firstClusterNum, 8, 1);
+    dir->DIR_FstClusLO[1] = bitExtracted(firstClusterNum, 8, 9);
 
     //extract higher bits of first cluster
     unsigned char highBits[2];
-    highBits[0] = bitExtracted(clusterNum, 8, 17);
-    highBits[1] = bitExtracted(clusterNum, 8, 25);
-    strcpy(dir->DIR_FstClusHI, highBits);
-
-    dir->DIR_CrtTimeTenth = 100;
-    dir->DIR_CrtTime[0] = 0;
-    dir->DIR_CrtTime[1] = 0;
-    dir->DIR_CrtDate[0] = 0;
-    dir->DIR_CrtDate[1] = 0;
-    dir->DIR_LstAccDate[0] = 0;
-    dir->DIR_LstAccDate[1] = 0;
-    dir->DIR_WrtTime[0] = 0;
-    dir->DIR_WrtTime[1] = 0;
-    dir->DIR_WrtDate[0] = 0;
-    dir->DIR_WrtDate[1] = 0;
-    dir->DIR_FileSize[0] = 0;
-    dir->DIR_FileSize[1] = 0;
-    dir->DIR_FileSize[2] = 0;
-    dir->DIR_FileSize[3] = 0;
+    dir->DIR_FstClusHI[0] = bitExtracted(firstClusterNum, 8, 17);
+    dir->DIR_FstClusHI[1] = bitExtracted(firstClusterNum, 8, 25);
 }
 
-//translate direntry into 32 bit string to be written to image
-char* dirEntryText(struct DIRENTRY *dir){
-    char* dirStr = malloc(32);
-    int i;
-    for (i=0; i < 11; i++){
-        if (dir->DIR_Name[i] == 0){
-            dirStr[i] = 32;
-        }
-        else{
-            dirStr[i] = dir->DIR_Name[i];
-        }
-    }
-    dirStr[11] = dir->DIR_Attr;
-    dirStr[12] = dir->DIR_NTRes;
-    dirStr[13] = dir->DIR_CrtTimeTenth;
-    for (i=0; i < 2; i++){
-        dirStr[i+14] = dir->DIR_CrtTime[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+16] = dir->DIR_CrtDate[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+18] = dir->DIR_LstAccDate[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+20] = dir->DIR_FstClusHI[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+22] = dir->DIR_WrtTime[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+24] = dir->DIR_WrtDate[i];
-    }
-    for (i=0; i < 2; i++){
-        dirStr[i+26] = dir->DIR_FstClusLO[i];
-    }
-    for (i=0; i < 4; i++){
-        dirStr[i+28] = dir->DIR_FileSize[i];
-    }
+//Translate direntry into 32 bit string to be written to image
+char *directoryToString(struct DIRENTRY *dir){
+
+    char *dirStr = malloc(32);
+
+    //Set all bytes to 0 to clean allocated memory
+    memset(dirStr, 0, 32);
+    
+    //Set first 11 bytes as spaces for the name entry
+    memset(dirStr, 32, 11);
+
+    //Copy name
+    memcpy(dirStr, dir->DIR_Name, 8);
+
+    //Copy other values
+    memcpy(&dirStr[11], &dir->DIR_Attr, 21);
 
     return dirStr;
+}
+
+//Convert dirName and firstClusterNum into a directory entry string
+char *makeDirEntryString(varStruct *fat32vars, char *dirName, int firstClusterNum) {
+    char *dirString = malloc(32);
+
+    //Set all bytes to 0 to clean allocated memory
+    memset(dirString, 0, 32);
+    
+    //Set first 11 bytes as spaces for the name entry
+    memset(dirString, 32, 11);
+    
+    //Copy passed in name
+    int loop;
+    for(loop = 0; loop < strlen(dirName); ++loop) {
+        dirString[loop] = toupper(dirName[loop]);
+    }
+
+    //Set attribute
+    dirString[11] = ATTR_DIRECTORY;
+
+    //extract lower bits of first cluster
+    unsigned char lowBits[2];
+    dirString[26] = bitExtracted(firstClusterNum, 8, 1);
+    dirString[27] = bitExtracted(firstClusterNum, 8, 9);
+
+    //extract higher bits of first cluster
+    unsigned char highBits[2];
+    dirString[20] = bitExtracted(firstClusterNum, 8, 17);
+    dirString[21] = bitExtracted(firstClusterNum, 8, 25);
+
+    return dirString;
 }
 
 //returns k bits of number at position p
