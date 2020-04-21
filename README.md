@@ -1,5 +1,22 @@
 # OS-Project3
 
+## Division of Labor
+
+- exit: Tyler
+- info: Tyler
+- size: Chelese
+- ls: Chelese
+- cd: Tyler
+- creat: Chelese
+- mkdir: Kevin
+- mv: Tyler
+- open: Tyler
+- close: Tyler
+- read: Tyler
+- write: Kevin
+- rm: Tyler
+- cp: Chelese
+
 ## Commands
 
 ## exit
@@ -82,7 +99,7 @@ If TO is not given, create a copy in the current directory called TO.
 
 All file and directory names are converted to uppercase as per the FAT32 specifications, including the user input before being compared to the entry names. Names can be no longer than 8 characters.
 
-#Known Bugs
+# Known Bugs
 
 If the last file in a cluster is removed / moved, the cluster remains allocated in the FAT.
 
