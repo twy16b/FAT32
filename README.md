@@ -41,7 +41,7 @@ Prints out the filesize of the file in the current directory with the name FILEN
 
 ## ls DIRNAME
 
-Prints out all entries within DIRNAME found in the current directory.
+Prints out all entries within the subdirectory DIRNAME.
 
 If no DIRNAME is given, it prints out all the entries in the current directory.
 
@@ -61,17 +61,17 @@ Creates a new directory in the current directory called DIRNAME.
 
 ## mv FROM TO
 
-If TO is a directory in the current directory, it will move the FROM file into that directory.
+If TO is a subdirectory, it will move the file called FROM into that directory.
 
-If TO is not found, FROM will be renamed.
+If TO is not found, the file named FROM will be renamed as TO.
 
 ## open FILENAME MODE
 
-Opens the file in the current directory named FILENAME with MODE denoting whether it is read-only, write-only, or both.
+Opens the file named FILENAME with MODE determining whether it is read-only, write-only, or both.
 
 ## close FILENAME
 
-Closes the file in the current directory named FILENAME if it is open.
+Closes the file named FILENAME if it is open.
 
 ## read FILENAME OFFSET SIZE
 
@@ -79,28 +79,28 @@ If the file has been opened in read mode, it prints out SIZE bytes starting at O
 
 ## write FILENAME OFFSET SIZE "STRING"
 
-If the file has been opened in write mode, it writes "STRING" of size BYTES starting at OFFSET.
+If the file has been opened in write mode, it writes SIZE bytes of "STRING" starting at OFFSET.
 
 If OFFSET + SIZE is greater than the current filesize, it will increase the file size for that file's entry.
 
+If SIZE is greater than the length of "STRING", all additional bytes will be 0.
+
 ## rm FILENAME
 
-Removes the file in the current directory called FILENAME and marks all associated FAT entries as empty.
+Removes the file called FILENAME and marks all associated FAT entries as empty.
 
-Also removed the long name entry if applicable.
+Also removes the long name entry if applicable.
 
 ## cp FILENAME TO
 
-Creates a copy of the file in the current directory called FILENAME in the directory called TO.
+Creates a copy of the file called FILENAME in the directory called TO.
 
-If TO is not given, create a copy in the current directory called TO.
+If TO is not given, it creates a copy in the current directory called TO.
 
 # Things to Note
+
+All commands will only search the current directory for files and subdirectories. The "." and ".." subdirectories point to their respective locations and are valid arguments for destinations. Absolute paths are not valid arguments.
 
 All file and directory names are converted to uppercase as per the FAT32 specifications, including the user input before being compared to the entry names. Names can be no longer than 8 characters.
 
 # Known Bugs
-
-If the last file in a cluster is removed / moved, the cluster remains allocated in the FAT.
-
-If a file is removed / moved and isn't the last entry in the directory, it is marked with value 229 as per the FAT32 specifications. However, if the last file is then removed / moved, that entry will be marked with 0 while the previous entry will remain marked with 229 even if it is now the last entry in that directory.
