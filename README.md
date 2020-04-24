@@ -5,7 +5,7 @@
 - exit: Tyler
 - info: Tyler
 - size: Chelese
-- ls: Chelese
+- ls: Chelese + Kevin + Tyler
 - cd: Tyler
 - creat: Chelese
 - mkdir: Kevin
