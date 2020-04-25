@@ -576,7 +576,7 @@ void fat32mv(FILE *image, varStruct *fat32vars, char *FROM, char *TO) {
         return;
     }
 
-    if(openFileIndex(fat32vars, dirFROM->DIR_Name) > 0) {
+    if(openFileIndex(fat32vars, dirFROM->DIR_Name) >= 0) {
         printf("Cannot move opened file\n");
         return;
     }
@@ -774,7 +774,7 @@ void fat32read(FILE *image, varStruct *fat32vars, char* filename, char *offsetSt
 
         if(compareFilenames(dir->DIR_Name, filename) == 0) {
             int isOpen;
-            if((isOpen = openFileIndex(fat32vars, dir->DIR_Name)) > 0) {
+            if((isOpen = openFileIndex(fat32vars, dir->DIR_Name)) < 0) {
                 printf("File not open\n");
                 return;
             }
@@ -940,7 +940,7 @@ void fat32rm(FILE *image, varStruct *fat32vars, char* filename) {
                 return;
             }
             else {
-                if(openFileIndex(fat32vars, filename) > 0) fat32close(fat32vars, filename);
+                if(openFileIndex(fat32vars, filename) >= 0) fat32close(fat32vars, filename);
 
                 //Clear out FAT entries
                 clearFATentries(image, fat32vars, dir);
@@ -1050,7 +1050,7 @@ void fat32cp(FILE *image, varStruct *fat32vars, instruction* instr_ptr) {
     // }
 
 
-    if(openFileIndex(fat32vars, filename) > 0) {
+    if(openFileIndex(fat32vars, filename) >= 0) {
         printf("Cannot move opened file\n");
         return;
     }
